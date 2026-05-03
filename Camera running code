@@ -1,0 +1,1 @@
+pkill -f rpicam; pkill -f picamera; DISPLAY=:0 python -u ~/detect_person.py
