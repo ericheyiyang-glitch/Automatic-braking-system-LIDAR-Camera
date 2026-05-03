@@ -1,0 +1,63 @@
+cat > ~/lidar_front.py << 'EOF'
+"""
+STL-19P LiDAR — 后台线程版，零延迟取距离
+"""
+import serial, struct, time, statistics, threading
+
+PKT_LEN = 47
+HEADER = 0x54
+VER_LEN = 0x2C
+
+HALF_ANGLE = 5
+MIN_DIST = 500
+MAX_DIST = 4000
+MIN_INTENSITY = 50
+
+class STL19P:
+    def __init__(self, port='/dev/ttyUSB0', baudrate=230400):
+        self.ser = serial.Serial(port, baudrate, timeout=0.1)
+        self.buf = bytearray()
+        self._lock = threading.Lock()
+        self._latest_distance = 0   # 最新距离
+        self._latest_time = 0       # 最近一次更新时间
+        self._running = True
+        # 滑动窗口存最近的有效点
+        self._window = []           # [(timestamp, dist), ...]
+        self._window_duration = 0.1 # 100ms 窗口
+
+        self._thread = threading.Thread(target=self._reader_loop, daemon=True)
+        self._thread.start()
+
+    def _reader_loop(self):
+        """后台不停读 LiDAR，更新最新距离"""
+        while self._running:
+            try:
+                self.buf += self.ser.read(256)
+                while len(self.buf) >= PKT_LEN:
+                    if self.buf[0] != HEADER or self.buf[1] != VER_LEN:
+                        self.buf.pop(0)
+                        continue
+                    pkt = bytes(self.buf[:PKT_LEN])
+                    self.buf = self.buf[PKT_LEN:]
+                    self._process_packet(pkt)
+            except Exception as e:
+                print(f"Read error: {e}")
+                time.sleep(0.05)
+
+    def _process_packet(self, pkt):
+        sa = struct.unpack('<H', pkt[4:6])[0] / 100.0
+        ea = struct.unpack('<H', pkt[42:44])[0] / 100.0
+        step = ((ea - sa) % 360) / 11
+        now = time.time()
+
+        new_points = []
+        for i in range(12):
+            off = 6 + i * 3
+            d = struct.unpack('<H', pkt[off:off+2])[0]
+            inten = pkt[off+2]
+            ang = (sa + step * i) % 360
+            if not (MIN_DIST <= d <= MAX_DIST):
+                continue
+            if inten < MIN_INTENSITY:
+                continue
+            a_signed = ang if
